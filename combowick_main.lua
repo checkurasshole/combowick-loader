@@ -101,6 +101,15 @@ local Tabs = {
     UI      = Window:AddTab("UI Settings", "settings"),
 }
 
+-- A bare loadstring (no getgenv().cb_f) is a key user — land them straight on the
+-- Premium Key tab, unconditionally, so a slow/failed session check never strands them
+-- on the Main tab. A cb_f/free run keeps the Main (Free Session) tab.
+do --[[CWKEYTAB]]
+    local isFreeSource = false
+    pcall(function() if getgenv and getgenv().cb_f == true then isFreeSource = true end end)
+    if not isFreeSource then pcall(function() Tabs.Key:Show() end) end
+end
+
 if M.looksTampered() then
     Library:Notify({Title="⚠️ Tampering", Description="Modified functions were detected in your executor.", Time=6})
 end
@@ -315,6 +324,7 @@ task.spawn(function()
         if result.require_flag == true and not hasFlag then
             safeSet(statusLabel, "🔑 Key required")
             safeSet(hintLabel, "This copy needs a key. Free access is only via our official links.")
+            pcall(function() Tabs.Key:Show() end)
             Library:Notify({Title="COMBOWICK", Description="A key is required here. Grab one from the Premium Key tab.", Time=6})
             return
         end
@@ -411,6 +421,10 @@ task.spawn(function()
             Library:Notify({Title="COMBOWICK", Description="This game is not supported yet.", Time=6})
         end
 
+    elseif result.status == "key_required" then
+        safeSet(statusLabel, "🔑 Key required")
+        safeSet(hintLabel, "This game needs a key — enter it in the 'Premium Key' tab.")
+        pcall(function() Tabs.Key:Show() end)
     else
         safeSet(statusLabel, "Error")
         safeSet(hintLabel, "Could not reach the server. Please run the script again.")
