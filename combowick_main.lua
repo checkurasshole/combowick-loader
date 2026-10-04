@@ -139,7 +139,7 @@ end
 InfoGroup:AddDivider()
 InfoGroup:AddLabel("Upgrade to an 11-hour key to remove the cooldown.", true)
 InfoGroup:AddButton({
-    Text = "Copy Key Link", Tooltip = "combowick-keys.vercel.app/verify/provider-select",
+    Text = "Copy Key Link", Tooltip = "keys.combowick.com/verify/provider-select",
     Func = function()
         pcall(function() setclipboard(M.KEY_URL) end)
         Library:Notify({Title="COMBOWICK", Description="Link copied. Paste it into your browser.", Time=4})
@@ -300,7 +300,7 @@ HelpGroup:AddButton({
     end,
 })
 HelpGroup:AddDivider()
-HelpGroup:AddLabel("❓ How do I get premium?\nGet a key at combowick-keys.vercel.app/verify, then paste it into the Premium Key tab. One tap is enough.", true)
+HelpGroup:AddLabel("❓ How do I get premium?\nGet a key at keys.combowick.com/verify, then paste it into the Premium Key tab. One tap is enough.", true)
 HelpGroup:AddLabel("⏳ Why am I on cooldown?\nThe free version has a waiting period between sessions. An 11-hour key removes it completely.", true)
 HelpGroup:AddLabel("🎮 It is not working in my game.\nThe free version is not available in every game. Check our Discord for the list of supported games.", true)
 HelpGroup:AddLabel("🔑 What is my HWID?\nIt is your hardware ID. Copy it from the Premium Key tab if support asks for it.", true)
