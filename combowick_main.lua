@@ -94,12 +94,15 @@ local Window = Library:CreateWindow({
     Title = "COMBOWICK", Footer = "Free Version", NotifySide = "Right",
     ShowCustomCursor = false, AutoShow = true, Size = UDim2.fromOffset(560, 340),
 })
-local Tabs = {
-    Main    = Window:AddTab("Main",        "user"),
-    Key     = Window:AddTab("Premium Key", "key"),
-    Suggest = Window:AddTab("Suggestions", "message-square"),
-    UI      = Window:AddTab("UI Settings", "settings"),
-}
+M.LANG = "en"
+local Tabs = {}
+pcall(function() if M.buildHomeTab then Tabs.Info = M.buildHomeTab(Library, Window) end end)
+Tabs.Main    = Window:AddTab("Main",        "user")
+Tabs.Key     = Window:AddTab("Premium Key", "key")
+pcall(function() if M.buildGamesTab then Tabs.Games = M.buildGamesTab(Library, Window) end end)
+Tabs.Suggest = Window:AddTab("Suggestions", "message-square")
+Tabs.UI      = Window:AddTab("UI Settings", "settings")
+pcall(function() Tabs.Main:Show() end) -- land where we always did (Info is just first in the list)
 
 -- A bare loadstring (no getgenv().cb_f) is a key user — land them straight on the
 -- Premium Key tab, unconditionally, so a slow/failed session check never strands them
@@ -446,6 +449,7 @@ ThemeManager:SetFolder("COMBOWICK")
 SaveManager:SetFolder("COMBOWICK/game")
 SaveManager:BuildConfigSection(Tabs.UI)
 ThemeManager:ApplyToTab(Tabs.UI)
+pcall(function() if M.addGoldTheme then M.addGoldTheme(Library, Tabs.UI) end end)
 SaveManager:LoadAutoloadConfig()
 
 -- Premium game (has a key script but no free session): open the loader straight on
