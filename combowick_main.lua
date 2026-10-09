@@ -29,6 +29,7 @@ if not M then
     return
 end
 
+M.LANG = "en" -- set first: free-session reloads + teleport re-arm use this language
 -- [i18n] Translated builds set M.EXPIRED_TITLE / M.EXPIRED_SUB + the M.KEY_* strings
 -- below in their language. English keeps these values; the module has matching fallbacks.
 M.KEY_PROMPT         = "🔑 Have a key?"
@@ -94,7 +95,6 @@ local Window = Library:CreateWindow({
     Title = "COMBOWICK", Footer = "Free Version", NotifySide = "Right",
     ShowCustomCursor = false, AutoShow = true, Size = UDim2.fromOffset(560, 340),
 })
-M.LANG = "en"
 local Tabs = {}
 pcall(function() if M.buildHomeTab then Tabs.Info = M.buildHomeTab(Library, Window) end end)
 Tabs.Main    = Window:AddTab("Main",        "user")
