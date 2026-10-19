@@ -323,6 +323,11 @@ function LanguageSelector:pick(lang)
     task.delay(1.5, function() if self.alive == gen then self:showChangeToast(lang) end end)
 end
 
+-- continue/close from the picker: the language that is ALREADY loaded just closes (no hub reload)
+function LanguageSelector:continueWith(lang)
+    if self.loadedLanguage and lang == self.loadedLanguage then self:cleanup() else self:pick(lang) end
+end
+
 -- ---------- Init (same contract as v1) ----------
 function LanguageSelector:Init(scripts)
     self.scripts = scripts or {}
@@ -625,10 +630,7 @@ function LanguageSelector:CreateGUI()
         self:track(cont.MouseEnter:Connect(function() tween(cont, 0.12, { BackgroundColor3 = C.goldHot }) end))
         self:track(cont.MouseLeave:Connect(function() tween(cont, 0.12, { BackgroundColor3 = C.gold }) end))
     end
-    local function go()
-        click()
-        if self.loadedLanguage and selected == self.loadedLanguage then self:cleanup() else self:pick(selected) end
-    end
+    local function go() click(); self:continueWith(selected) end
     onTap(cont, go)
     onTap(close, go) -- closing continues with the selected language (v1 loaded nothing)
 
