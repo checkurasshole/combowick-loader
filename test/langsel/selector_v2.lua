@@ -19,7 +19,8 @@ local RunService = game:GetService("RunService")
 local player = Players.LocalPlayer
 local SAVE_FILE = "COMBOWICK_Language.json" -- one choice for every game
 local AUTOLOAD_SECONDS = 3
-local MOBILE = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+-- touch without a mouse = phone/tablet (some Android phones report a keyboard, so don't rely on KeyboardEnabled)
+local MOBILE = UserInputService.TouchEnabled and not UserInputService.MouseEnabled
 local FONT = Enum.Font.Code -- same as the COMBO_WICK hub (Obsidian)
 local DISCORD_INVITE = "https://discord.gg/ufrz9Zaqs8"
 local LOGO_URL = "https://cdn.discordapp.com/icons/934631259861319733/a_3c6b0ba4deedbc36b995e33a02d0948c.png?size=64"
@@ -104,14 +105,15 @@ end
 -- non-Latin scripts read better in Gotham than in the monospace hub font
 local function fitFont(l) l.Font = tostring(l.Text):match("[\128-\255]") and Enum.Font.GothamMedium or FONT end
 
-local clickSound
+-- one shared click sound, reused across runs (no new Sound per execution)
 local function click()
     pcall(function()
-        if not clickSound then
-            clickSound = Instance.new("Sound"); clickSound.SoundId = "rbxasset://sounds/electronicpingshort.wav"; clickSound.Volume = 0.25
-            clickSound.Parent = game:GetService("SoundService")
+        local ss = game:GetService("SoundService")
+        local s = ss:FindFirstChild("CW_LangClick")
+        if not s then
+            s = Instance.new("Sound"); s.Name = "CW_LangClick"; s.SoundId = "rbxasset://sounds/electronicpingshort.wav"; s.Volume = 0.25; s.Parent = ss
         end
-        clickSound:Play()
+        s:Play()
     end)
 end
 
@@ -129,16 +131,27 @@ local function onTap(btn, fn)
             local moved = (Vector2.new(i.Position.X, i.Position.Y) - downPos).Magnitude
             local held = os.clock() - downAt
             downPos = nil
-            if moved <= 10 and held <= 0.8 then fn() end
+            -- a cancelled touch (scroll/another GUI took it) never counts; slow taps from kids still do
+            if i.UserInputState == Enum.UserInputState.End and moved <= 10 and held <= 1.5 then fn() end
         end
     end)
 end
 
 -- images (flags, logo): downloaded once to the executor workspace and shown with getcustomasset;
 -- whatever is behind them (2-letter badge) stays visible if anything fails
+-- one download at a time (13 parallel HttpGets can freeze executors where HttpGet blocks)
+local imgQueue, imgBusy = {}, false
+local function runQueue()
+    if imgBusy then return end
+    imgBusy = true
+    task.spawn(function()
+        while #imgQueue > 0 do pcall(table.remove(imgQueue, 1)) end
+        imgBusy = false
+    end)
+end
 local function webImage(img, url, file, onShown)
     if not (typeof(getcustomasset) == "function" and canFile()) then return end
-    task.spawn(function()
+    table.insert(imgQueue, function()
         local path = "combowick_flags/" .. file
         local ok = pcall(function()
             if not isfile(path) then
@@ -146,12 +159,16 @@ local function webImage(img, url, file, onShown)
                 local data = game:HttpGet(url)
                 if type(data) ~= "string" or #data < 100 or data:sub(2, 4) ~= "PNG" then error("bad png") end
                 writefile(path, data)
+            elseif #readfile(path) < 100 then -- a half-written file from a crash: re-download next time
+                delfile(path); error("partial file")
             end
             local id = getcustomasset(path)
+            if type(id) ~= "string" or id == "" then error("no asset id") end -- some mobile executors return ""
             if img.Parent then img.Image = id; img.ImageTransparency = 0; if onShown then onShown() end end
         end)
         if not ok then pcall(function() if isfile(path) and delfile then delfile(path) end end) end
     end)
+    runQueue()
 end
 local function setFlag(img, badge, key)
     local cc = FLAG[key]
@@ -198,11 +215,16 @@ function LanguageSelector:suggested()
     pcall(function() table.insert(codes, player.LocaleId) end)
     pcall(function() table.insert(codes, game:GetService("LocalizationService").RobloxLocaleId) end)
     pcall(function() table.insert(codes, game:GetService("LocalizationService").SystemLocaleId) end)
+    -- first non-English match wins (Roblox often reports en-us by default while the device is es-mx etc.)
+    local english
     for _, code in ipairs(codes) do
         local key = LOCALE[(tostring(code or ""):lower()):match("^(%a+)") or ""]
-        if key and self.scripts[key] then return key end
+        if key and self.scripts[key] then
+            if key ~= "English" then return key end
+            english = key
+        end
     end
-    return self.scripts["English"] and "English" or self:orderedKeys()[1]
+    return english or (self.scripts["English"] and "English") or self:orderedKeys()[1]
 end
 
 function LanguageSelector:orderedKeys()
@@ -222,8 +244,7 @@ function LanguageSelector:readSave()
         local ok, d = pcall(function() return HttpService:JSONDecode(readfile(f)) end)
         return ok and type(d) == "table" and d or nil
     end
-    local d = read(SAVE_FILE)
-    if d then return d end
+    if isfile(SAVE_FILE) then return read(SAVE_FILE) end -- (a corrupt global save must NOT bring back an old v1 language)
     -- migrate a v1 per-game save (LanguageSelector_<GameId>_<hash>_SavedSettings.json)
     local old = read("LanguageSelector_" .. tostring(game.GameId) .. "_" .. tostring(self.SCRIPT_ID) .. "_SavedSettings.json")
     if old and old.language then
@@ -232,6 +253,14 @@ function LanguageSelector:readSave()
         return m
     end
     return nil
+end
+
+-- a language that failed to load must not stay saved (or every run would auto-load the broken one)
+function LanguageSelector:forgetLanguage(lang)
+    if not canFile() then return end
+    local d = self:readSave()
+    if d and d.language == lang then pcall(writefile, SAVE_FILE, HttpService:JSONEncode({ remember = self.remember, v = 2 })) end
+    if self.savedLanguage == lang then self.savedLanguage = nil end
 end
 
 function LanguageSelector:writeSave(lang)
@@ -257,9 +286,10 @@ function LanguageSelector:loadScript(lang)
             if ok and type(res) == "string" and #res > 0 then src = res; break end
             if attempt == 1 then task.wait(1.5) end
         end
-        if not src then warn("[COMBO_WICK] couldn't download the " .. lang .. " script"); self:showLoadError(lang); return end
+        if not src then warn("[COMBO_WICK] couldn't download the " .. lang .. " script"); self:forgetLanguage(lang); self:showLoadError(lang); return end
         local fn, cerr = loadstring(src)
-        if not fn then warn("[COMBO_WICK] " .. lang .. " script didn't compile: " .. tostring(cerr)); self:showLoadError(lang); return end
+        if not fn then warn("[COMBO_WICK] " .. lang .. " script didn't compile: " .. tostring(cerr)); self:forgetLanguage(lang); self:showLoadError(lang); return end
+        self.loadedLanguage = lang
         local ok, err = pcall(fn)
         if not ok then warn("[COMBO_WICK] " .. lang .. " script error: " .. tostring(err)) end
     end)
@@ -313,19 +343,35 @@ end
 -- ---------- shared visuals ----------
 function LanguageSelector:newGui(name)
     self:cleanup()
+    -- sweep leftovers from older runs/versions (no getgenv, or a v1/v2 picker still open)
+    pcall(function()
+        for _, r in ipairs({ guiParent(), game:GetService("CoreGui") }) do
+            for _, c in ipairs(r:GetChildren()) do
+                if c:IsA("ScreenGui") and (c.Name:sub(1, 11) == "CW_Language" or c.Name == "LanguageSelectorGUI" or c.Name == "ResetNotificationGUI") then c:Destroy() end
+            end
+        end
+        local lb = game:GetService("Lighting"):FindFirstChild("CW_LangBlur"); if lb then lb:Destroy() end
+    end)
     local g = Instance.new("ScreenGui")
     g.Name = name; g.ResetOnSpawn = false; g.ZIndexBehavior = Enum.ZIndexBehavior.Sibling; g.DisplayOrder = 999
     pcall(function() g.IgnoreGuiInset = true end)
-    g.Parent = guiParent()
+    -- low-identity executors can't parent to CoreGui: fall back to PlayerGui instead of erroring (= no picker at all)
+    if not pcall(function() g.Parent = guiParent() end) then g.Parent = player:WaitForChild("PlayerGui") end
     self.gui = g
     local sc = Instance.new("UIScale"); sc.Parent = g
+    local camConn
     local function fit()
         local cam = workspace.CurrentCamera
         local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
         sc.Scale = math.clamp(math.min(vp.X / 500, vp.Y / 420), 0.55, 1)
     end
-    fit()
-    if workspace.CurrentCamera then self:track(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fit)) end
+    local function hook()
+        if camConn then camConn:Disconnect() end
+        if workspace.CurrentCamera then camConn = self:track(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"):Connect(fit)) end
+        fit()
+    end
+    hook()
+    self:track(workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(hook)) -- autoexec: camera may not exist yet
     return g
 end
 
@@ -402,7 +448,10 @@ function LanguageSelector:showChangeToast(lang)
     if self.gui then return end
     local g = self:newGui("CW_LanguageToast")
     local f = Instance.new("Frame")
-    f.AnchorPoint = Vector2.new(1, 1); f.Size = UDim2.fromOffset(250, 42); f.Position = UDim2.new(1, 280, 1, -16)
+    -- phones: top-center (bottom-right is where the jump button is); PC: bottom-right
+    local shownPos = MOBILE and UDim2.new(0.5, 0, 0, 16) or UDim2.new(1, -16, 1, -16)
+    local hiddenPos = MOBILE and UDim2.new(0.5, 0, 0, -70) or UDim2.new(1, 280, 1, -16)
+    f.AnchorPoint = MOBILE and Vector2.new(0.5, 0) or Vector2.new(1, 1); f.Size = UDim2.fromOffset(250, 42); f.Position = hiddenPos
     f.BackgroundColor3 = C.bg; f.Parent = g
     corner(f, 6); self:runningEdge(f, 1.4)
     local t = txt(f, ui(lang, 1) .. ": " .. native(lang), 13, C.text); t.Position = UDim2.fromOffset(12, 0); t.Size = UDim2.new(1, -100, 1, 0); fitFont(t)
@@ -410,14 +459,14 @@ function LanguageSelector:showChangeToast(lang)
     b.AnchorPoint = Vector2.new(1, 0.5); b.Size = UDim2.fromOffset(78, 26); b.Position = UDim2.new(1, -8, 0.5, 0); b.BackgroundColor3 = C.tile; b.AutoButtonColor = false
     b.Text = ui(lang, 6); b.TextColor3 = C.goldSoft; b.Font = FONT; b.TextSize = 13; b.Parent = f; fitFont(b)
     corner(b, 4); stroke(b, C.gold, 1, 0.5)
-    tween(f, 0.35, { Position = UDim2.new(1, -16, 1, -16) }, Enum.EasingStyle.Quint)
+    tween(f, 0.35, { Position = shownPos }, Enum.EasingStyle.Quint)
     local done = false
     local gen = self.alive
     onTap(b, function() if not done and self.alive == gen then done = true; click(); self:CreateGUI() end end)
     task.delay(8, function()
         if done or not f.Parent or self.alive ~= gen then return end
         done = true
-        local tw = tween(f, 0.3, { Position = UDim2.new(1, 280, 1, -16) })
+        local tw = tween(f, 0.3, { Position = hiddenPos })
         tw.Completed:Connect(function() if self.gui == g then self:cleanup() end end)
     end)
 end
@@ -477,18 +526,22 @@ function LanguageSelector:CreateGUI()
     local div = Instance.new("Frame"); div.Size = UDim2.new(1, 0, 0, 1); div.Position = UDim2.new(0, 0, 1, 0); div.BorderSizePixel = 0
     div.BackgroundColor3 = C.gold; div.BackgroundTransparency = 0.82; div.Parent = top
     do
-        local dragging, startPos, startInput
+        -- follow only the finger/mouse that grabbed the bar (a 2nd finger on the joystick/camera must not move it)
+        local dragInput, startPos, startAt
         self:track(top.InputBegan:Connect(function(i)
-            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging, startInput, startPos = true, i.Position, win.Position end
+            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragInput, startAt, startPos = i, i.Position, win.Position end
         end))
         self:track(UserInputService.InputChanged:Connect(function(i)
-            if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-                local d = i.Position - startInput
+            if not dragInput then return end
+            local mine = (dragInput.UserInputType == Enum.UserInputType.Touch and i == dragInput)
+                or (dragInput.UserInputType == Enum.UserInputType.MouseButton1 and i.UserInputType == Enum.UserInputType.MouseMovement)
+            if mine then
+                local d = i.Position - startAt
                 win.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
             end
         end))
         self:track(UserInputService.InputEnded:Connect(function(i)
-            if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
+            if i == dragInput or (dragInput and i.UserInputType == Enum.UserInputType.MouseButton1 and dragInput.UserInputType == Enum.UserInputType.MouseButton1) then dragInput = nil end
         end))
     end
 
@@ -497,7 +550,7 @@ function LanguageSelector:CreateGUI()
     grid.Position = UDim2.fromOffset(12, 44); grid.Size = UDim2.new(1, -24, 1, -44 - 52); grid.ZIndex = 2
     grid.BackgroundTransparency = 1; grid.BorderSizePixel = 0; grid.ScrollBarThickness = 2; grid.ScrollBarImageColor3 = C.gold; grid.ScrollBarImageTransparency = 0.3
     grid.CanvasSize = UDim2.new(); grid.AutomaticCanvasSize = Enum.AutomaticSize.Y; grid.ScrollingDirection = Enum.ScrollingDirection.Y; grid.Parent = win
-    local gl = Instance.new("UIGridLayout"); gl.CellSize = UDim2.new(1 / 3, -6, 0, 48); gl.CellPadding = UDim2.fromOffset(6, 6); gl.SortOrder = Enum.SortOrder.LayoutOrder; gl.Parent = grid
+    local gl = Instance.new("UIGridLayout"); gl.CellSize = UDim2.new(1 / 3, -7, 0, 48); gl.CellPadding = UDim2.fromOffset(6, 6); gl.SortOrder = Enum.SortOrder.LayoutOrder; gl.Parent = grid
     local gp = Instance.new("UIPadding"); gp.PaddingRight = UDim.new(0, 6); gp.PaddingTop = UDim.new(0, 3); gp.PaddingBottom = UDim.new(0, 3); gp.Parent = grid
 
     local tiles, order, cont, rem, det = {}, {}, nil, nil, nil
@@ -572,7 +625,10 @@ function LanguageSelector:CreateGUI()
         self:track(cont.MouseEnter:Connect(function() tween(cont, 0.12, { BackgroundColor3 = C.goldHot }) end))
         self:track(cont.MouseLeave:Connect(function() tween(cont, 0.12, { BackgroundColor3 = C.gold }) end))
     end
-    local function go() click(); self:pick(selected) end
+    local function go()
+        click()
+        if self.loadedLanguage and selected == self.loadedLanguage then self:cleanup() else self:pick(selected) end
+    end
     onTap(cont, go)
     onTap(close, go) -- closing continues with the selected language (v1 loaded nothing)
 
@@ -585,7 +641,8 @@ function LanguageSelector:CreateGUI()
         elseif k == Enum.KeyCode.Left then choose(order[math.max(1, idx - 1)])
         elseif k == Enum.KeyCode.Down then choose(order[math.min(#order, idx + 3)])
         elseif k == Enum.KeyCode.Up then choose(order[math.max(1, idx - 3)])
-        elseif k == Enum.KeyCode.Return or k == Enum.KeyCode.KeypadEnter or k == Enum.KeyCode.Escape then go() end
+        elseif k == Enum.KeyCode.Return or k == Enum.KeyCode.KeypadEnter then go()
+        elseif k == Enum.KeyCode.Escape and self.loadedLanguage then self:cleanup() end
     end))
 
     paint(false)
