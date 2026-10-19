@@ -1,6 +1,10 @@
--- COMBO_WICK Language Selector v2 (test copy — the live one is uyh505-eng/published-content-jycoui/main/yeshhhh)
+-- COMBO_WICK Language Selector v2. Live copies: checkurasshole/combowick-loader/lang_selector.lua (IQ) and
+-- checkurasshole/Script/langselector-module.lua (the game-script wrappers). Edit lang-selector-v2/selector_v2.lua.
 -- Same API as v1 so IQ keeps working: LanguageSelector.new(), sel:Init(scripts) -> true if it handled loading,
 -- sel:CreateGUI(), and sel.generateScriptsHash can still be overridden (IQ pins it).
+-- In a game script (loaded after IQ already picked): no 2nd picker / 2nd countdown — the IQ language loads right
+-- away, and if the game doesn't have it, English loads with a "not in this game · change" note (the saved
+-- choice stays, so the key menu and other games keep the player's language).
 -- Fixes vs v1: scrolling never picks (tap-only + select-then-continue), suggested language from the player's
 -- Roblox locale, one saved choice for every game (old per-game saves migrate), "change" opens the picker BEFORE
 -- anything loads, X continues instead of loading nothing, "remember" is respected.
@@ -79,6 +83,28 @@ local UI = {
     ["Korean"] = { "언어", "기억하기", "계속", "감지됨", "로딩 중", "변경" },
     ["Chinese (Simplified)"] = { "语言", "记住", "继续", "检测到", "加载中", "更改" },
     ["Arabic (العربية)"] = { "اللغة", "تذكر", "متابعة", "تم الاكتشاف", "جارٍ التحميل", "تغيير" },
+}
+-- "<language> isn't in this game · using <fallback>" (shown in the player's own language)
+local NOT_HERE = {
+    ["English"] = "isn't in this game · using",
+    ["Spanish"] = "no está en este juego · usando",
+    ["Portuguese"] = "não tem neste jogo · usando",
+    ["Indonesian"] = "tidak ada di game ini · memakai",
+    ["Filipino"] = "wala sa larong ito · gamit ang",
+    ["Vietnamese"] = "không có trong game này · dùng",
+    ["Thai"] = "ไม่มีในเกมนี้ · ใช้",
+    ["Russian"] = "нет в этой игре · используем",
+    ["German"] = "gibt es in diesem Spiel nicht · nutze",
+    ["French"] = "pas dispo dans ce jeu · on utilise",
+    ["Korean"] = "이 게임에는 없어요 · 사용:",
+    ["Chinese (Simplified)"] = "此游戏暂不支持 · 使用",
+    ["Arabic (العربية)"] = "غير متوفرة في هذه اللعبة · نستخدم",
+}
+-- other spellings game wrappers use for the same language
+local ALIAS = {
+    ["Arabic"] = "Arabic (العربية)", ["العربية"] = "Arabic (العربية)",
+    ["Chinese"] = "Chinese (Simplified)", ["Chinese Simplified"] = "Chinese (Simplified)",
+    ["Tagalog"] = "Filipino", ["Bahasa Indonesia"] = "Indonesian",
 }
 local function ui(lang, i) return ((UI[lang] or UI["English"])[i]) end
 local function native(lang) return (DISPLAY[lang] or { lang })[1] end
@@ -289,6 +315,13 @@ function LanguageSelector:loadScript(lang)
         if not src then warn("[COMBO_WICK] couldn't download the " .. lang .. " script"); self:forgetLanguage(lang); self:showLoadError(lang); return end
         local fn, cerr = loadstring(src)
         if not fn then warn("[COMBO_WICK] " .. lang .. " script didn't compile: " .. tostring(cerr)); self:forgetLanguage(lang); self:showLoadError(lang); return end
+        -- switching language: close the menu the previous language opened (scripts expose getgenv().Library)
+        if self.loadedLanguage and self.loadedLanguage ~= lang then
+            pcall(function()
+                local L = getgenv and getgenv().Library
+                if type(L) == "table" and type(L.Unload) == "function" then L:Unload() end
+            end)
+        end
         self.loadedLanguage = lang
         local ok, err = pcall(fn)
         if not ok then warn("[COMBO_WICK] " .. lang .. " script error: " .. tostring(err)) end
@@ -331,18 +364,43 @@ end
 -- ---------- Init (same contract as v1) ----------
 function LanguageSelector:Init(scripts)
     self.scripts = scripts or {}
-    self.SCRIPT_ID = self:generateScriptsHash()
-    pcall(function() if getgenv and getgenv().__CW_LANG_SEL then getgenv().__CW_LANG_SEL:cleanup() end end)
+    self.SCRIPT_ID = self:generateScriptsHash() -- from the wrapper's own keys (finds old v1 saves)
+    -- one spelling per language from here on ("Arabic" in some wrappers = "Arabic (العربية)" in IQ)
+    local norm = {}
+    for k, v in pairs(self.scripts) do norm[ALIAS[k] or k] = v end
+    self.scripts = norm
+    -- a selector that already loaded something this session (IQ -> the hub) = we're the game script's picker
+    local prev
+    pcall(function() prev = getgenv and getgenv().__CW_LANG_SEL end)
+    local nested = type(prev) == "table" and prev ~= self and prev.loadedLanguage ~= nil and prev.SCRIPT_ID ~= self.SCRIPT_ID
+    pcall(function() if prev then prev:cleanup() end end)
     pcall(function() if getgenv then getgenv().__CW_LANG_SEL = self end end)
     local save = self:readSave()
     if save then self.remember = save.remember ~= false end
-    local lang = save and save.language
-    if self.remember and lang and self.scripts[lang] then
+    local lang = (self.remember and save and save.language) or (nested and prev.loadedLanguage) or nil
+    lang = lang and (ALIAS[lang] or lang)
+    if not lang then return false end
+    if self.scripts[lang] then
         self.savedLanguage = lang
-        self:showAutoLoad(lang)
+        if nested then self:quickLoad(lang) else self:showAutoLoad(lang) end
         return true
     end
-    return false
+    -- this game doesn't have the player's language: English (else the closest one), WITHOUT overwriting the save
+    local fb = (self.scripts["English"] and "English") or self:suggested()
+    if not fb then return false end
+    self:quickLoad(fb, lang)
+    return true
+end
+
+-- load now (no countdown), then the small "change" toast — or the "not in this game" note when it's a fallback
+function LanguageSelector:quickLoad(lang, missing)
+    self:cleanup()
+    local gen = self.alive
+    self:loadScript(lang)
+    task.delay(1.5, function()
+        if self.alive ~= gen then return end
+        if missing then self:showFallbackToast(missing, lang) else self:showChangeToast(lang) end
+    end)
 end
 
 -- ---------- shared visuals ----------
@@ -469,6 +527,37 @@ function LanguageSelector:showChangeToast(lang)
     local gen = self.alive
     onTap(b, function() if not done and self.alive == gen then done = true; click(); self:CreateGUI() end end)
     task.delay(8, function()
+        if done or not f.Parent or self.alive ~= gen then return end
+        done = true
+        local tw = tween(f, 0.3, { Position = hiddenPos })
+        tw.Completed:Connect(function() if self.gui == g then self:cleanup() end end)
+    end)
+end
+
+-- ---------- "Arabic isn't in this game · using English  [change]" ----------
+function LanguageSelector:showFallbackToast(missing, used)
+    if self.gui then return end
+    local g = self:newGui("CW_LanguageToast")
+    local f = Instance.new("Frame")
+    local shownPos = MOBILE and UDim2.new(0.5, 0, 0, 16) or UDim2.new(1, -16, 1, -16)
+    local hiddenPos = MOBILE and UDim2.new(0.5, 0, 0, -80) or UDim2.new(1, 400, 1, -16)
+    f.AnchorPoint = MOBILE and Vector2.new(0.5, 0) or Vector2.new(1, 1); f.Size = UDim2.fromOffset(350, 54); f.Position = hiddenPos
+    f.BackgroundColor3 = C.bg; f.Parent = g
+    corner(f, 6); self:runningEdge(f, 1.4)
+    local brand = txt(f, "COMBO_WICK", 11, C.gold); brand.Position = UDim2.fromOffset(12, 5); brand.Size = UDim2.fromOffset(120, 13)
+    local t = txt(f, native(missing) .. " " .. (NOT_HERE[missing] or NOT_HERE["English"]) .. " " .. native(used), 13, C.text)
+    t.Position = UDim2.fromOffset(12, 18); t.Size = UDim2.new(1, -110, 0, 32); t.TextWrapped = true; t.TextTruncate = Enum.TextTruncate.None
+    t.TextScaled = true; fitFont(t)
+    local tsc = Instance.new("UITextSizeConstraint"); tsc.MaxTextSize = 13; tsc.MinTextSize = 9; tsc.Parent = t
+    local b = Instance.new("TextButton")
+    b.AnchorPoint = Vector2.new(1, 0.5); b.Size = UDim2.fromOffset(84, 28); b.Position = UDim2.new(1, -9, 0.5, 0); b.BackgroundColor3 = C.tile; b.AutoButtonColor = false
+    b.Text = ui(missing, 6); b.TextColor3 = C.goldSoft; b.Font = FONT; b.TextSize = 13; b.Parent = f; fitFont(b)
+    corner(b, 4); stroke(b, C.gold, 1, 0.5)
+    tween(f, 0.35, { Position = shownPos }, Enum.EasingStyle.Quint)
+    local done = false
+    local gen = self.alive
+    onTap(b, function() if not done and self.alive == gen then done = true; click(); self:CreateGUI() end end)
+    task.delay(10, function()
         if done or not f.Parent or self.alive ~= gen then return end
         done = true
         local tw = tween(f, 0.3, { Position = hiddenPos })
