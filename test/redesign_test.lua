@@ -2201,6 +2201,27 @@ function M.playSplash(onDone)
     if not ok then finish() end
 end
 
+-- Discord server logo as a local asset (downloaded once, then read from disk). nil if the executor can't.
+local LOGO_FILE = "COMBOWICK_logo.png"
+local LOGO_URL = "https://cdn.discordapp.com/icons/934631259861319733/a_3c6b0ba4deedbc36b995e33a02d0948c.png?size=128"
+function M.logoAsset()
+    if M._logo ~= nil then return M._logo or nil end
+    local ok, asset = pcall(function()
+        local gca = getcustomasset or (syn and syn.getsynasset)
+        if not (gca and writefile and readfile and isfile) then return nil end
+        local function good(s) return type(s) == "string" and #s > 200 and s:sub(2, 4) == "PNG" end
+        if not (isfile(LOGO_FILE) and good(readfile(LOGO_FILE))) then
+            local body = game:HttpGet(LOGO_URL)
+            if not good(body) then return nil end
+            writefile(LOGO_FILE, body)
+        end
+        local a = gca(LOGO_FILE)
+        return (type(a) == "string" and a ~= "") and a or nil
+    end)
+    M._logo = (ok and asset) or false
+    return M._logo or nil
+end
+
 -- floating button + gold dust + watermark HUD (rebuilt per window; overlays are global singletons)
 function M.setupPremiumFX(Library, FX)
     local keyWin = Library.ScreenGui
@@ -2229,6 +2250,14 @@ function M.setupPremiumFX(Library, FX)
     local bgrad = mk("UIGradient", { Color = fxSeq() }, bst)
     local blbl = mk("TextLabel", { BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), Font = Enum.Font.GothamBlack, Text = "CW", TextSize = 18, TextColor3 = PAL.btn }, btn)
     makeDraggable(btn, toggleWindow, rememberPos("float"))
+    -- server logo on the button (cached to disk once); "CW" text stays as the fallback
+    task.spawn(function()
+        local asset = M.logoAsset()
+        if not asset or not btn.Parent then return end
+        local img = mk("ImageLabel", { BackgroundTransparency = 1, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), Size = UDim2.new(1, -6, 1, -6), Image = asset, ScaleType = Enum.ScaleType.Crop }, btn)
+        mk("UICorner", { CornerRadius = UDim.new(1, 0) }, img)
+        blbl.Visible = false
+    end)
 
     -- GOLD DUST (only while the hub is open — it's decoration for the window, not for gameplay)
     local dustSG = freshScreen("CW_FX_Dust", 30, true)
@@ -2631,7 +2660,13 @@ function M.addGoldTheme(Library, SettingsTab)
     local function setAnims(on)
         if type(Library.Animations) ~= "table" then return end
         for k, v in pairs(Library.Animations) do
-            if on then if origAnims[k] == nil then origAnims[k] = v end; Library.Animations[k] = true
+            -- ToggleWindow stays off: Obsidian's window fade tweens EVERY element of every tab on each
+            -- open/close (thousands of tweens in one frame = the CW-button lag on mobile). popIn/easeOut
+            -- below already animate the open/close cheaply with one UIScale tween.
+            if k == "ToggleWindow" then
+                if on then if origAnims[k] == nil then origAnims[k] = v end; Library.Animations[k] = false
+                elseif origAnims[k] ~= nil then Library.Animations[k] = origAnims[k] end
+            elseif on then if origAnims[k] == nil then origAnims[k] = v end; Library.Animations[k] = true
             elseif origAnims[k] ~= nil then Library.Animations[k] = origAnims[k] end
         end
         -- crisper, direction-aware tab slide (Obsidian's built-in PlayTabAnimation reads these)
