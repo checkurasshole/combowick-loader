@@ -621,15 +621,7 @@ function M.buildInfoTab(Library)
     pcall(function() UserBox:AddLabel("Executor: " .. execName) end)
     local sessLbl; pcall(function() sessLbl = UserBox:AddLabel("Session: 0s") end)
 
-    local SessBox = InfoTab:AddRightGroupbox("Session")
-    local gameLbl, playerLbl, pingLbl
-    pcall(function() gameLbl   = SessBox:AddLabel("Game: loading\226\128\166") end)
-    pcall(function() playerLbl = SessBox:AddLabel("Players: -") end)
-    pcall(function() pingLbl   = SessBox:AddLabel("Ping: - ms") end)
-    pcall(function() SessBox:AddLabel("Job ID: " .. string.sub(tostring(game.JobId), 1, 12) .. "\226\128\166") end)
-    pcall(function() SessBox:AddDivider() end)
-    pcall(function() SessBox:AddButton({ Text = "Copy Job ID", Func = function() pcall(function() setclipboard(tostring(game.JobId)) end); notify("Job ID copied!") end }) end)
-    pcall(function() SessBox:AddButton({ Text = "Rejoin Server", Func = function() pcall(function() game:GetService("TeleportService"):TeleportToPlaceInstance(game.PlaceId, game.JobId, lp) end) end }) end)
+    local gameLbl, playerLbl, pingLbl   -- (Session box removed; the live loop below skips nil labels)
 
     local LinkBox = InfoTab:AddLeftGroupbox("Links")
     pcall(function() LinkBox:AddButton({ Text = "Copy Discord", Func = function() pcall(function() setclipboard(M.DISCORD_INVITE) end); notify("Discord copied!") end }) end)
@@ -1417,52 +1409,11 @@ function M.buildHomeTab(Library, Window)
     Me:AddLabel(uiCol(UI_GREY, "@" .. lp.Name .. "  ·  " .. execName), true)
     Me:AddLabel(uiCol(UI_GREY, string.format(tr("age"), lp.AccountAge or 0)), true)
 
-    local Srv = Tab:AddRightGroupbox(tr("server"), "server")
-    local lGame  = Srv:AddLabel(uiCol(UI_GREY, "..."), true)
-    local lStats = Srv:AddLabel("", true)
-    task.spawn(function()
-        local ok, info = pcall(function() return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId) end)
-        pcall(function() lGame:SetText("<b>" .. uiClean(ok and info and info.Name or "?") .. "</b>") end)
-    end)
-    Srv:AddButton({ Text = tr("copy_job"), Func = function() uiCopy(tostring(game.JobId)); uiNotify(Library, tr("job_copied")) end })
-    Srv:AddButton({ Text = tr("rejoin"), Func = function()
-        uiNotify(Library, tr("rejoining"))
-        pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, lp) end)
-    end })
-    Srv:AddButton({ Text = tr("hop"), Tooltip = tr("hop_tip"), Func = function()
-        task.spawn(function()
-            uiNotify(Library, tr("hop_finding"))
-            local d = uiDecode(uiGet("https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Desc&limit=100&excludeFullGames=true"))
-            local pick
-            for _, s in ipairs(d and d.data or {}) do
-                if s.id ~= game.JobId and (s.playing or 0) < (s.maxPlayers or 0) - 1 then pick = s break end
-            end
-            if not pick then return uiNotify(Library, tr("hop_none")) end
-            pcall(function() TeleportService:TeleportToPlaceInstance(game.PlaceId, pick.id, lp) end)
-        end)
-    end })
-
     local Links = Tab:AddLeftGroupbox(tr("links"), "link")
     Links:AddButton({ Text = tr("discord"), Func = function() uiCopy(M.DISCORD_INVITE); uiNotify(Library, tr("discord_copied")) end })
     Links:AddButton({ Text = tr("website"), Func = function() uiCopy(M.withCreator and M.withCreator(M.WEBSITE_URL) or M.WEBSITE_URL); uiNotify(Library, tr("website_copied")) end })
     if M.addCustomBox then pcall(M.addCustomBox, Tab, Library) end
 
-    task.spawn(function()
-        local joined = os.clock()
-        while not Library.Unloaded do
-            local ping = "-"
-            pcall(function() ping = tostring(math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())) end)
-            local ok = pcall(function()
-                lStats:SetText(table.concat({
-                    uiCol(UI_GREY, tr("players") .. ": ") .. #Players:GetPlayers() .. "/" .. tostring(Players.MaxPlayers),
-                    uiCol(UI_GREY, tr("ping") .. ": ") .. ping .. " ms",
-                    uiCol(UI_GREY, tr("here_for") .. ": ") .. dur(os.clock() - joined),
-                }, "\n"))
-            end)
-            if not ok then break end
-            task.wait(2)
-        end
-    end)
     return Tab
 end
 
