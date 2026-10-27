@@ -634,7 +634,7 @@ function M.buildInfoTab(Library)
     local LinkBox = InfoTab:AddLeftGroupbox("Links")
     pcall(function() LinkBox:AddButton({ Text = "Copy Discord", Func = function() pcall(function() setclipboard(M.DISCORD_INVITE) end); notify("Discord copied!") end }) end)
     if M.addCustomBox then pcall(M.addCustomBox, InfoTab, Library) end
-    pcall(function() LinkBox:AddButton({ Text = "Copy Website", Func = function() pcall(function() setclipboard(M.WEBSITE_URL) end); notify("Website copied!") end }) end)
+    pcall(function() LinkBox:AddButton({ Text = "Copy Website", Func = function() pcall(function() setclipboard(M.withCreator and M.withCreator(M.WEBSITE_URL) or M.WEBSITE_URL) end); notify("Website copied!") end }) end)
 
     -- game name (async, best-effort)
     task.spawn(function()
@@ -1444,7 +1444,7 @@ function M.buildHomeTab(Library, Window)
 
     local Links = Tab:AddLeftGroupbox(tr("links"), "link")
     Links:AddButton({ Text = tr("discord"), Func = function() uiCopy(M.DISCORD_INVITE); uiNotify(Library, tr("discord_copied")) end })
-    Links:AddButton({ Text = tr("website"), Func = function() uiCopy(M.WEBSITE_URL); uiNotify(Library, tr("website_copied")) end })
+    Links:AddButton({ Text = tr("website"), Func = function() uiCopy(M.withCreator and M.withCreator(M.WEBSITE_URL) or M.WEBSITE_URL); uiNotify(Library, tr("website_copied")) end })
     if M.addCustomBox then pcall(M.addCustomBox, Tab, Library) end
 
     task.spawn(function()
@@ -3335,7 +3335,7 @@ function M.addBanner(Library, cfg)
     tab.MouseEnter:Connect(function() TS:Create(stroke, TweenInfo.new(0.15), { Transparency = 0, Thickness = 1.6 }):Play() end)
     tab.MouseLeave:Connect(function() TS:Create(stroke, TweenInfo.new(0.2), { Transparency = 0.15, Thickness = 1 }):Play() end)
     tab.MouseButton1Click:Connect(function()
-        local url = cfg.url or "https://keys.combowick.com"
+        local url = M.withCreator and M.withCreator(cfg.url or "https://keys.combowick.com") or (cfg.url or "https://keys.combowick.com")
         local ok = pcall(function() (setclipboard or toclipboard)(url) end)
         local copied = "Link copied"
         pcall(function() copied = uiText()("banner_copied") end)   -- module language (plain English in the harness)
@@ -3399,7 +3399,7 @@ end
 -- Free sessions: a small gold card at 30 / 10 / 2 minutes left (live countdown, the running sale if
 -- there is one, "Get a key" copies the store link). The "session ended" popup uses the same card.
 -- English only until it goes live (then translate with the rest of UI_TEXT).
-M.KEY_URL = "https://keys.combowick.com/premium-keys"
+M.PREMIUM_URL = "https://keys.combowick.com/premium-keys"   -- (M.KEY_URL is the FREE key link, used by the loader)
 M.UPSELL_AT = { 1800, 600, 120 }
 M.UPSELL_TEXT = {
     ends_in = "Free session ends in %s", ended = "Free session ended",
@@ -3407,6 +3407,66 @@ M.UPSELL_TEXT = {
     ended_pitch = "Get a key to keep playing with no timer, or come back when your cooldown is over.",
     get = "Get a key", later = "Later", ok = "OK", copied = "Store link copied. Paste it in your browser.",
 }
+-- ===================== CREATOR CODE =====================
+-- A creator's code makes every "Get a key" link in the hub open the store with ?code=XXX: the buyer gets
+-- 10% off and the creator gets credit. Set by the player (Creator Code box) or by a creator's loadstring:
+--   getgenv().cw_creator = "ZEN"  loadstring(game:HttpGet(".../IQ"))()
+-- Saved to a file so it still counts when they buy days later. Checked against the store before saving.
+M.CREATOR_FILE = "combowick_creator.txt"
+local CODE_RPC = "https://sqahviibykrzlwnulgmw.supabase.co/rest/v1/rpc/check_creator_code"
+local STORE_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNxYWh2aWlieWtyemx3bnVsZ213Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgyODAxNjQsImV4cCI6MjEwMzg1NjE2NH0.mvRGR-d3EOcy8bBlCTDwIHEF4ELIU9PfVXDi8NSALlA"   -- public anon key of the store (same one the website uses)
+local creatorCache
+local function creatorRequest(code)
+    local req = (syn and syn.request) or (http and http.request) or http_request or request
+    if not req then return nil end
+    local ok, res = pcall(req, {
+        Url = CODE_RPC, Method = "POST",
+        Headers = { ["Content-Type"] = "application/json", apikey = STORE_ANON, Authorization = "Bearer " .. STORE_ANON },
+        Body = game:GetService("HttpService"):JSONEncode({ p_code = code }),
+    })
+    if not ok or type(res) ~= "table" then return nil end
+    local ok2, data = pcall(function() return game:GetService("HttpService"):JSONDecode(res.Body or res.body or "") end)
+    if ok2 and type(data) == "table" and data.valid then return data end
+    if ok2 and type(data) == "table" and data.valid == false then return false end
+    return nil
+end
+local function cleanCode(c) c = tostring(c or ""):upper():gsub("[^A-Z0-9_-]", "") return (#c >= 3 and #c <= 20) and c or nil end
+function M.creatorCode()
+    if creatorCache == nil then
+        creatorCache = false
+        pcall(function() if isfile and isfile(M.CREATOR_FILE) then creatorCache = cleanCode(readfile(M.CREATOR_FILE)) or false end end)
+    end
+    return creatorCache or nil
+end
+-- returns code, discount_pct on success; nil, reason on failure ("invalid" / "offline")
+function M.setCreatorCode(code)
+    local c = cleanCode(code)
+    if not c then return nil, "invalid" end
+    local r = creatorRequest(c)
+    if r == nil then return nil, "offline" end
+    if r == false then return nil, "invalid" end
+    creatorCache = r.code
+    pcall(function() if writefile then writefile(M.CREATOR_FILE, r.code) end end)
+    return r.code, tonumber(r.discount_pct) or 10
+end
+function M.clearCreatorCode()
+    creatorCache = false
+    pcall(function() if delfile and isfile and isfile(M.CREATOR_FILE) then delfile(M.CREATOR_FILE) end end)
+end
+-- store link with the creator code on it (the website remembers ?code= and applies it at checkout)
+function M.withCreator(url)
+    local c = M.creatorCode()
+    if not c or type(url) ~= "string" then return url end
+    return url .. (url:find("?", 1, true) and "&" or "?") .. "code=" .. c
+end
+-- a creator's loadstring sets getgenv().cw_creator: adopt it once (newest creator wins), in the background
+task.spawn(function()
+    local tag
+    pcall(function() tag = getgenv and getgenv().cw_creator end)
+    tag = cleanCode(tag)
+    if tag and tag ~= M.creatorCode() then pcall(M.setCreatorCode, tag) end
+end)
+
 local function upGold()
     local ok, c = pcall(function() return PAL.accent end)   -- live theme colour inside the module; plain gold in the harness
     return (ok and typeof(c) == "Color3") and c or Color3.fromRGB(240, 185, 40)
@@ -3490,7 +3550,7 @@ local function upCard(opts)
         return b
     end
     button(M.UPSELL_TEXT.get, true, function()
-        pcall(function() (setclipboard or toclipboard)(M.KEY_URL) end)
+        pcall(function() (setclipboard or toclipboard)(M.withCreator(M.PREMIUM_URL)) end)
         if M.toast then M.toast(M.UPSELL_TEXT.copied, 3.5) end
         close()
     end)
@@ -3561,6 +3621,55 @@ function M.addCustomBox(Tab, Library)
     box:AddButton({ Text = M.CUSTOM_TEXT.button, Func = function()
         pcall(function() (setclipboard or toclipboard)(M.DISCORD_INVITE) end)
         if M.toast then M.toast(M.CUSTOM_TEXT.copied, 3.5) end
+    end })
+    pcall(M.addCreatorBox, Tab, Library)
+    return box
+end
+
+-- "Creator Code" box: enter a YouTuber's code once -> every key link in the hub carries it (10% off)
+M.CREATOR_TEXT = {
+    title = "Creator Code",
+    none = "Got a code from a YouTuber? Enter it for <b>10% off</b> your key.",
+    on = "Code <b>%s</b> is on: <b>%d%% off</b> when you get a key.",
+    placeholder = "Creator code", save = "Save code", saved = "Creator code %s saved: %d%% off your key.",
+    removed = "Creator code removed.", invalid = "That code doesn't exist.", offline = "Couldn't check the code. Try again.",
+    get = "Get a key with this code", copied = "Store link copied. Paste it in your browser.",
+}
+function M.addCreatorBox(Tab, Library)
+    local T = M.CREATOR_TEXT
+    local box = Tab:AddRightGroupbox(T.title, "ticket")
+    local gold = upGold()
+    local hex = string.format("#%02x%02x%02x", math.floor(gold.R * 255), math.floor(gold.G * 255), math.floor(gold.B * 255))
+    local function paint(s) return (s:gsub("<b>", '<font color="' .. hex .. '"><b>'):gsub("</b>", "</b></font>")) end
+    local pct = 10
+    local status = box:AddLabel("", true)
+    local function refresh()
+        local c = M.creatorCode()
+        pcall(function() status:SetText(paint(c and string.format(T.on, c, pct) or T.none)) end)
+    end
+    refresh()
+    local input = box:AddInput("CW_CreatorCode", { Text = "", Default = M.creatorCode() or "", Placeholder = T.placeholder, Finished = false, ClearTextOnFocus = false, Callback = function() end })
+    box:AddButton({ Text = T.save, Func = function()
+        local v = ""
+        pcall(function() v = (Library.Options and Library.Options.CW_CreatorCode and Library.Options.CW_CreatorCode.Value) or (input and input.Value) or "" end)
+        task.spawn(function()
+            if v:gsub("%s", "") == "" then
+                M.clearCreatorCode(); refresh()
+                if M.toast then M.toast(T.removed, 2.5) end
+                return
+            end
+            local code, res = M.setCreatorCode(v)
+            if code then
+                pct = res or 10; refresh()
+                if M.toast then M.toast(string.format(T.saved, code, pct), 3) end
+            elseif M.toast then
+                M.toast(res == "offline" and T.offline or T.invalid, 3)
+            end
+        end)
+    end })
+    box:AddButton({ Text = T.get, Func = function()
+        pcall(function() (setclipboard or toclipboard)(M.withCreator(M.PREMIUM_URL)) end)
+        if M.toast then M.toast(T.copied, 3) end
     end })
     return box
 end
