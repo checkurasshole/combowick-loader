@@ -13,6 +13,7 @@ ComboWick (also written Combo_WICK or Combo Wick) is a Roblox script hub. It mak
 - Discord: https://discord.gg/ufrz9Zaqs8
 - ScriptBlox: https://scriptblox.com/u/COMBO_WOOCK
 - Rscripts: https://rscripts.net/@ComboWick
+- HaxHell: https://haxhell.com/user/COMBO_WICK
 
 ComboWick is not related to the Magic: The Gathering card "Wick".
 <!-- combowick-brand -->
