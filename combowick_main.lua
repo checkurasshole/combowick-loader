@@ -1,4 +1,9 @@
-if _G.COMBOWICK_ACTIVE then return end
+if _G.COMBOWICK_ACTIVE then
+    -- already running here (free session): say so instead of doing nothing, and bring back the key button
+    pcall(function() game:GetService("StarterGui"):SetCore("SendNotification", { Title = "COMBO_WICK", Text = "Already running in this server. To use a key, tap the Have a key? button.", Duration = 7 }) end)
+    pcall(function() if _G.COMBOWICK_KEYPROMPT == false and _G.__CW_M and _G.__CW_M.showKeyPrompt then _G.__CW_M.showKeyPrompt() end end)
+    return
+end
 
 local HttpService = game:GetService("HttpService")
 local Players     = game:GetService("Players")
@@ -22,7 +27,7 @@ do
     -- to floor(os.time()/300) keeps it a CDN HIT within any 5-min window while still picking
     -- up a module push within <=5 min automatically.
     local ok, m = pcall(function() return loadstring(game:HttpGet(MODULE_URL .. "?cb=" .. tostring(math.floor(os.time()/300))))() end)
-    if ok and type(m) == "table" then M = m end
+    if ok and type(m) == "table" then M = m; _G.__CW_M = m end
 end
 if not M then
     warn("[COMBOWICK] module failed to load from " .. tostring(MODULE_URL))
@@ -167,7 +172,10 @@ KeyGroup:AddInput("KeyInput", {
     Placeholder      = "Paste your key here...",
     Callback         = function(v) keyInputValue = v end,
 })
+local submitAt = -10
 local function submitKey(key)
+    if os.clock() - submitAt < 4 then return end   -- double tap = one check
+    submitAt = os.clock()
     key = M.cleanKey(key)
     if key == "" then
         Library:Notify({Title="⚠️ No Key Entered", Description="Please enter your key.", Time=3})
@@ -176,12 +184,19 @@ local function submitKey(key)
     Library:Notify({Title="🔑 Checking", Description="Validating your key...", Time=2})
 
     -- NEW backend: validate the key + get this game's scripts in one call.
-    local data, err = M.validateKeyNew(key)
+    local data, err
+    for attempt = 1, 3 do   -- retry server hiccups (cold start) so a valid key isn't called invalid
+        data, err = M.validateKeyNew(key)
+        if type(data) == "table" then break end
+        local ne = type(err) == "string" and err:lower() or ""
+        if not (ne:find("network") or ne:find("request") or ne:find("response") or ne == "empty") then break end
+        if attempt < 3 then task.wait(1.2 * attempt) end
+    end
     if type(data) ~= "table" then
         local msg = "That key is not valid. Please check it and try again."
         if err == "wrong_game" then
             msg = "This key is for a different game. Get a key for this game."
-        elseif err == "network" or err == "no_request" then
+        elseif err == "network" or err == "no_request" or err == "bad_response" or err == "empty" then
             msg = "Network error. Please try again."
         end
         Library:Notify({Title="❌ Invalid Key", Description=msg, Time=5})
@@ -202,8 +217,7 @@ local function submitKey(key)
         Time = 3,
     })
     task.wait(0.4)
-    pcall(function() Library:Unload() end)
-    M.showSelector(scripts)
+    if M.showSelector(scripts) then pcall(function() Library:Unload() end) end
 end
 
 local function readKeyFromBox()
@@ -356,6 +370,7 @@ task.spawn(function()
                 safeSet(timerLabel, "The session has expired.")
                 safeSet(lSession, "Session time: expired")
                 _G.COMBOWICK_ACTIVE = false
+                if _G.__CW_KEYED then return end   -- key entered mid-session: keep the paid script open
                 pcall(M.unloadFreeGui)   -- close the free script's GUI (exposed its Library globally)
                 if M._keyPromptGui then pcall(function() M._keyPromptGui:Destroy() end); _G.COMBOWICK_KEYPROMPT = false end
                 pcall(function() Library:Unload() end)
@@ -381,6 +396,7 @@ task.spawn(function()
             safeSet(lCooldown, "Cooldown: finished")
             safeSet(hintLabel, "")
             Library:Notify({Title="COMBOWICK", Description="The cooldown has finished. Reloading...", Time=3})
+            if _G.__CW_KEYED then return end   -- they entered a key meanwhile: don't start a second copy
             pcall(function() Library:Unload() end)
             task.wait(0.5)
             M.reloadExist()
@@ -398,6 +414,7 @@ task.spawn(function()
             end
             safeSet(timerLabel, "Reloading...")
             safeSet(hintLabel, "")
+            if _G.__CW_KEYED then return end   -- they entered a key meanwhile: don't start a second copy
             pcall(function() Library:Unload() end)
             task.wait(0.5)
             M.reloadExist()
@@ -444,7 +461,7 @@ Library.ToggleKeybind = Options.MenuKeybind
 ThemeManager:SetLibrary(Library)
 SaveManager:SetLibrary(Library)
 SaveManager:IgnoreThemeSettings()
-SaveManager:SetIgnoreIndexes({"MenuKeybind"})
+SaveManager:SetIgnoreIndexes({"MenuKeybind", "KeyInput", "FeedbackMsg"})
 ThemeManager:SetFolder("COMBOWICK")
 SaveManager:SetFolder("COMBOWICK/game")
 SaveManager:BuildConfigSection(Tabs.UI)
